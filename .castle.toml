@@ -1,0 +1,9 @@
+# Read by Castle at repo onboarding. Every field is optional.
+language = "rust"
+base_branch = "main"
+setup = "cargo fetch"
+build = "cargo build"
+test = "cargo test"
+lint = "cargo clippy -- -D warnings"
+allowed_paths = ["src/", "Cargo.toml", "Cargo.lock", "README.md", "Dockerfile"]
+protected_paths = [".github/", ".castle.toml", "data/"]
