@@ -204,6 +204,36 @@ mod tests {
         }
     }
 
+    #[test]
+    fn valid_host_accepts_hostnames_and_ip_literals() {
+        for host in [
+            "localhost",
+            "example.com",
+            "api-1.example.com",
+            "127.0.0.1",
+            "::1",
+            "2001:db8::1",
+        ] {
+            assert!(valid_host(host), "host {host:?} was rejected");
+        }
+    }
+
+    #[test]
+    fn valid_host_rejects_leading_dashes_and_injection_attempts() {
+        for host in [
+            "",
+            "-c",
+            "--help",
+            "localhost;id",
+            "local host",
+            "localhost$(id)",
+            "localhost|id",
+            "localhost&id",
+        ] {
+            assert!(!valid_host(host), "host {host:?} was accepted");
+        }
+    }
+
     #[tokio::test]
     async fn slug_joins_words() {
         let (status, body) = text(app(AppState::default()), Request::get("/slug/Hello%20World").body(Body::empty()).unwrap()).await;
