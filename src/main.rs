@@ -71,8 +71,12 @@ async fn ping(Query(p): Query<PingParams>) -> Result<String, StatusCode> {
 }
 
 async fn create_user(State(s): State<AppState>, Json(u): Json<NewUser>) -> StatusCode {
+    let mut users = s.users.lock().unwrap();
+    if users.contains_key(&u.name) {
+        return StatusCode::CONFLICT;
+    }
     let hash = format!("{:x}", md5::compute(u.password.as_bytes()));
-    s.users.lock().unwrap().insert(
+    users.insert(
         u.name.clone(),
         StoredUser {
             name: u.name,
@@ -175,6 +179,41 @@ mod tests {
             .unwrap();
         let (status, _) = text(app(state), bad).await;
         assert_eq!(status, StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn duplicate_user_refused() {
+        let state = AppState::default();
+        let create1 = Request::post("/users")
+            .header("content-type", "application/json")
+            .body(Body::from(r#"{"name":"bob","password":"secret"}"#))
+            .unwrap();
+        let (status1, _) = text(app(state.clone()), create1).await;
+        assert_eq!(status1, StatusCode::CREATED);
+
+        // Second registration with the same name should be refused.
+        let create2 = Request::post("/users")
+            .header("content-type", "application/json")
+            .body(Body::from(r#"{"name":"bob","password":"newpass"}"#))
+            .unwrap();
+        let (status2, _) = text(app(state.clone()), create2).await;
+        assert_eq!(status2, StatusCode::CONFLICT);
+
+        // The original password must still work.
+        let login = Request::post("/login")
+            .header("content-type", "application/json")
+            .body(Body::from(r#"{"name":"bob","password":"secret"}"#))
+            .unwrap();
+        let (status3, _) = text(app(state.clone()), login).await;
+        assert_eq!(status3, StatusCode::OK);
+
+        // The new password must not work.
+        let login2 = Request::post("/login")
+            .header("content-type", "application/json")
+            .body(Body::from(r#"{"name":"bob","password":"newpass"}"#))
+            .unwrap();
+        let (status4, _) = text(app(state), login2).await;
+        assert_eq!(status4, StatusCode::UNAUTHORIZED);
     }
 
     #[tokio::test]
