@@ -53,7 +53,22 @@ pub fn app(state: AppState) -> Router {
 }
 
 /// Serve a file from ./data by name.
+/// Validate that `name` is a single plain file name (no path separators, no `.` or `..`).
+fn is_valid_filename(name: &str) -> bool {
+    if name.is_empty() || name.contains("/") || name.contains("\\") {
+        return false;
+    }
+    if name == "." || name == ".." {
+        return false;
+    }
+    true
+}
+
+/// Serve a file from ./data by name.
 async fn read_file(Path(name): Path<String>) -> Result<String, StatusCode> {
+    if !is_valid_filename(&name) {
+        return Err(StatusCode::BAD_REQUEST);
+    }
     let path = format!("data/{name}");
     tokio::fs::read_to_string(&path)
         .await
@@ -152,6 +167,12 @@ mod tests {
     async fn an_unknown_file_is_404() {
         let (status, _) = text(app(AppState::default()), Request::get("/files/nope.txt").body(Body::empty()).unwrap()).await;
         assert_eq!(status, StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn path_traversal_is_rejected() {
+        let (status, _) = text(app(AppState::default()), Request::get("/files/..%2FCargo.toml").body(Body::empty()).unwrap()).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
     }
 
     #[tokio::test]
