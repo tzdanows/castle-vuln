@@ -6,7 +6,7 @@ use std::process::Command;
 use std::sync::{Arc, Mutex};
 
 use axum::extract::{Path, Query, State};
-use axum::http::StatusCode;
+use axum::http::{HeaderMap, StatusCode};
 use axum::routing::{delete, get, post};
 use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
@@ -90,8 +90,27 @@ async fn login(State(s): State<AppState>, Json(l): Json<Login>) -> StatusCode {
     }
 }
 
-/// Remove a user.
-async fn delete_user(State(s): State<AppState>, Path(name): Path<String>) -> StatusCode {
+/// Remove a user, but only when the request carries the configured admin token.
+async fn delete_user(
+    State(s): State<AppState>,
+    Path(name): Path<String>,
+    headers: HeaderMap,
+) -> StatusCode {
+    let Ok(expected) = std::env::var("ADMIN_TOKEN") else {
+        return StatusCode::FORBIDDEN;
+    };
+    if expected.is_empty() {
+        return StatusCode::FORBIDDEN;
+    }
+    let authorized = headers
+        .get("authorization")
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.strip_prefix("Bearer "))
+        .is_some_and(|token| token == expected);
+    if !authorized {
+        return StatusCode::FORBIDDEN;
+    }
+
     if s.users.lock().unwrap().remove(&name).is_some() {
         StatusCode::NO_CONTENT
     } else {
@@ -126,6 +145,56 @@ mod tests {
     use axum::http::Request;
     use http_body_util::BodyExt;
     use tower::ServiceExt;
+
+    static ADMIN_TOKEN_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+    struct AdminTokenGuard {
+        previous: Option<String>,
+        _lock: tokio::sync::MutexGuard<'static, ()>,
+    }
+
+    impl Drop for AdminTokenGuard {
+        fn drop(&mut self) {
+            match &self.previous {
+                Some(token) => std::env::set_var("ADMIN_TOKEN", token),
+                None => std::env::remove_var("ADMIN_TOKEN"),
+            }
+        }
+    }
+
+    async fn set_admin_token(token: Option<&str>) -> AdminTokenGuard {
+        let lock = ADMIN_TOKEN_LOCK.lock().await;
+        let previous = std::env::var("ADMIN_TOKEN").ok();
+        match token {
+            Some(token) => std::env::set_var("ADMIN_TOKEN", token),
+            None => std::env::remove_var("ADMIN_TOKEN"),
+        }
+        AdminTokenGuard {
+            previous,
+            _lock: lock,
+        }
+    }
+
+    fn state_with_user(name: &str) -> AppState {
+        let state = AppState::default();
+        state.users.lock().unwrap().insert(
+            name.to_string(),
+            StoredUser {
+                name: name.to_string(),
+                password_hash: "hash".to_string(),
+            },
+        );
+        state
+    }
+
+    async fn delete_request(state: AppState, name: &str, token: Option<&str>) -> StatusCode {
+        let mut req = Request::delete(format!("/users/{name}"));
+        if let Some(token) = token {
+            req = req.header("authorization", format!("Bearer {token}"));
+        }
+        let (status, _) = text(app(state), req.body(Body::empty()).unwrap()).await;
+        status
+    }
 
     async fn text(router: Router, req: Request<Body>) -> (StatusCode, String) {
         let res = router.oneshot(req).await.unwrap();
@@ -175,6 +244,43 @@ mod tests {
             .unwrap();
         let (status, _) = text(app(state), bad).await;
         assert_eq!(status, StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn delete_without_configured_admin_token_is_forbidden() {
+        let state = state_with_user("ann");
+        let _env = set_admin_token(None).await;
+        let status = delete_request(state.clone(), "ann", Some("secret")).await;
+        assert_eq!(status, StatusCode::FORBIDDEN);
+        assert!(state.users.lock().unwrap().contains_key("ann"));
+    }
+
+    #[tokio::test]
+    async fn delete_without_authorization_header_is_forbidden() {
+        let state = state_with_user("ann");
+        let _env = set_admin_token(Some("secret")).await;
+        let status = delete_request(state.clone(), "ann", None).await;
+        assert_eq!(status, StatusCode::FORBIDDEN);
+        assert!(state.users.lock().unwrap().contains_key("ann"));
+    }
+
+    #[tokio::test]
+    async fn delete_with_wrong_token_is_forbidden() {
+        let state = state_with_user("ann");
+        let _env = set_admin_token(Some("secret")).await;
+        let status = delete_request(state.clone(), "ann", Some("wrong")).await;
+        assert_eq!(status, StatusCode::FORBIDDEN);
+        assert!(state.users.lock().unwrap().contains_key("ann"));
+    }
+
+    #[tokio::test]
+    async fn delete_with_correct_token_removes_user() {
+        let state = state_with_user("ann");
+        let _env = set_admin_token(Some("secret")).await;
+        let status = delete_request(state.clone(), "ann", Some("secret")).await;
+        assert_eq!(status, StatusCode::NO_CONTENT);
+        let missing = delete_request(state, "ann", Some("secret")).await;
+        assert_eq!(missing, StatusCode::NOT_FOUND);
     }
 
     #[tokio::test]
