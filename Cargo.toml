@@ -10,7 +10,7 @@ axum = "0.8"
 tokio = { version = "1", features = ["full"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-md5 = "0.7"
+argon2 = "0.6"
 # Pinned on purpose so Dependabot and Trivy have something to find:
 # regex 1.5.4: RUSTSEC-2022-0013 / GHSA-m5pq-gvj9-9vr8, ReDoS, fixed in 1.5.5.
 regex = "=1.5.4"
