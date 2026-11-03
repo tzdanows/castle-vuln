@@ -9,6 +9,8 @@ use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::routing::{delete, get, post};
 use axum::{Json, Router};
+use argon2::password_hash::{phc::PasswordHash, PasswordHasher, PasswordVerifier};
+use argon2::Argon2;
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Default)]
@@ -19,7 +21,7 @@ pub struct AppState {
 #[derive(Clone, Serialize)]
 pub struct StoredUser {
     pub name: String,
-    /// Hex MD5 of the password.
+    /// Argon2id PHC string (includes the per-user salt and parameters).
     pub password_hash: String,
 }
 
@@ -71,7 +73,10 @@ async fn ping(Query(p): Query<PingParams>) -> Result<String, StatusCode> {
 }
 
 async fn create_user(State(s): State<AppState>, Json(u): Json<NewUser>) -> StatusCode {
-    let hash = format!("{:x}", md5::compute(u.password.as_bytes()));
+    let hash = match Argon2::default().hash_password(u.password.as_bytes()) {
+        Ok(hash) => hash.to_string(),
+        Err(_) => return StatusCode::INTERNAL_SERVER_ERROR,
+    };
     s.users.lock().unwrap().insert(
         u.name.clone(),
         StoredUser {
@@ -83,10 +88,19 @@ async fn create_user(State(s): State<AppState>, Json(u): Json<NewUser>) -> Statu
 }
 
 async fn login(State(s): State<AppState>, Json(l): Json<Login>) -> StatusCode {
-    let hash = format!("{:x}", md5::compute(l.password.as_bytes()));
-    match s.users.lock().unwrap().get(&l.name) {
-        Some(u) if u.password_hash == hash => StatusCode::OK,
-        _ => StatusCode::UNAUTHORIZED,
+    let password_hash = match s.users.lock().unwrap().get(&l.name) {
+        Some(u) => u.password_hash.clone(),
+        None => return StatusCode::UNAUTHORIZED,
+    };
+
+    let parsed = match PasswordHash::new(&password_hash) {
+        Ok(parsed) => parsed,
+        Err(_) => return StatusCode::UNAUTHORIZED,
+    };
+
+    match Argon2::default().verify_password(l.password.as_bytes(), &parsed) {
+        Ok(()) => StatusCode::OK,
+        Err(_) => StatusCode::UNAUTHORIZED,
     }
 }
 
