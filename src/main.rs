@@ -60,11 +60,27 @@ async fn read_file(Path(name): Path<String>) -> Result<String, StatusCode> {
         .map_err(|_| StatusCode::NOT_FOUND)
 }
 
+/// A host is accepted only if it contains hostname or IP-literal characters and
+/// cannot be mistaken for a command-line flag.
+fn valid_host(host: &str) -> bool {
+    !host.is_empty()
+        && !host.starts_with('-')
+        && host
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | ':'))
+}
+
 /// Ping a host once and return the command's output.
 async fn ping(Query(p): Query<PingParams>) -> Result<String, StatusCode> {
-    let out = Command::new("sh")
+    if !valid_host(&p.host) {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+    let out = Command::new("ping")
         .arg("-c")
-        .arg(format!("ping -c 1 -W 1 {}", p.host))
+        .arg("1")
+        .arg("-W")
+        .arg("1")
+        .arg(&p.host)
         .output()
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     Ok(String::from_utf8_lossy(&out.stdout).into_owned())
@@ -175,6 +191,17 @@ mod tests {
             .unwrap();
         let (status, _) = text(app(state), bad).await;
         assert_eq!(status, StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn ping_rejects_shell_metacharacters_and_spaces() {
+        for host in ["localhost;id", "local host"] {
+            let req = Request::get(format!("/ping?host={}", host.replace(' ', "%20")))
+                .body(Body::empty())
+                .unwrap();
+            let (status, _) = text(app(AppState::default()), req).await;
+            assert_eq!(status, StatusCode::BAD_REQUEST, "host {host:?} was accepted");
+        }
     }
 
     #[tokio::test]
