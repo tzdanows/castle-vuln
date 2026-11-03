@@ -21,7 +21,6 @@ In the dependencies (Dependabot alerts and the Trivy workflow):
 
 | Crate | Advisory |
 |---|---|
-| `regex 1.5.4` | RUSTSEC-2022-0013, regular expression denial of service |
 | `time 0.1.43` | RUSTSEC-2020-0071, segfault from `localtime_r` |
 
 In the Dockerfile (Trivy misconfiguration): runs as root, no healthcheck.
